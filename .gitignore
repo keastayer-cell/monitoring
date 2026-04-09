@@ -1,0 +1,5 @@
+.env.monitor
+monitor_targets.json
+__pycache__/
+*.pyc
+.DS_Store
