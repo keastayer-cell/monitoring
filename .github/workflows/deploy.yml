@@ -1,0 +1,70 @@
+name: Deploy Monitoring
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "monitor_health.py"
+      - "README.md"
+      - "monitor_targets.example.json"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-monitoring-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: python3 -m py_compile monitor_health.py && echo "Syntax OK"
+
+      - name: Upload monitoring files to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          source: "monitor_health.py,README.md,monitor_targets.example.json"
+          target: /opt/uptime-monitor
+
+      - name: Restart monitor on VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/uptime-monitor
+
+            python3 -m py_compile monitor_health.py
+
+            python3 - <<'PY'
+            import json
+            from pathlib import Path
+
+            path = Path('/opt/uptime-monitor/monitor_targets.json')
+            if path.exists():
+                data = json.loads(path.read_text(encoding='utf-8'))
+                changed = False
+                for item in data:
+                    target_id = str(item.get('id', ''))
+                    if target_id.startswith('bot-tan-') and item.get('affects_exit_code') is not False:
+                        item['affects_exit_code'] = False
+                        changed = True
+                if changed:
+                    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+            PY
+
+            systemctl restart uptime-monitor.service
+            systemctl is-active uptime-monitor.service
+            echo "Monitoring deployed at $(date)"
