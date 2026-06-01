@@ -19,5 +19,13 @@
     "repo": "keastayer-cell/tg-poll-bot",
     "type": "telegram_getme",
     "token_env_file_key": "BOT_TOKEN"
+  },
+  {
+    "id": "optional-bot-systemd",
+    "name": "Optional Bot (systemd)",
+    "repo": "local/optional-bot",
+    "type": "systemd",
+    "service": "optional-bot.service",
+    "affects_exit_code": false
   }
 ]

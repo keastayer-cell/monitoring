@@ -37,6 +37,20 @@ def _normalize_id(value: str) -> str:
     return normalized or "target"
 
 
+def _bool(value, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
 def check_url(url: str, timeout: int = 10) -> tuple[bool, str]:
     try:
         req = request.Request(url, headers={"User-Agent": "uptime-monitor/1.0"})
@@ -122,6 +136,7 @@ def load_targets(bot_env_file: Path) -> list[dict]:
                     "name": name,
                     "repo": repo,
                     "type": target_type,
+                    "affects_exit_code": _bool(item.get("affects_exit_code"), True),
                 }
 
                 if target_type == "url":
@@ -157,6 +172,7 @@ def load_targets(bot_env_file: Path) -> list[dict]:
             "repo": website_repo,
             "type": "url",
             "url": website_url,
+            "affects_exit_code": True,
         },
         {
             "id": "bot-systemd",
@@ -164,6 +180,7 @@ def load_targets(bot_env_file: Path) -> list[dict]:
             "repo": bot_repo,
             "type": "systemd",
             "service": service_name,
+            "affects_exit_code": True,
         },
         {
             "id": "bot-telegram-api",
@@ -171,6 +188,7 @@ def load_targets(bot_env_file: Path) -> list[dict]:
             "repo": bot_repo,
             "type": "telegram_getme",
             "token": bot_token,
+            "affects_exit_code": True,
         },
     ]
 
@@ -308,6 +326,11 @@ def main() -> int:
     current = {name: {"ok": ok, "details": details} for name, (ok, details) in checks.items()}
 
     failed_now = [name for name, (ok, _) in checks.items() if not ok]
+    blocking_failed_now = [
+        target_id
+        for target_id, (ok, _) in checks.items()
+        if not ok and _bool(targets_map.get(target_id, {}).get("affects_exit_code"), True)
+    ]
     failed_prev = [name for name, info in prev.items() if not info.get("ok", False)]
 
     became_down = sorted(set(failed_now) - set(failed_prev))
@@ -338,7 +361,7 @@ def main() -> int:
         target = targets_map.get(target_id, {"name": target_id, "repo": "-", "type": "-"})
         print(f"{status} {target.get('name')} | repo={target.get('repo')} | type={target.get('type')} | {details}")
 
-    return 0 if not failed_now else 1
+    return 0 if not blocking_failed_now else 1
 
 
 if __name__ == "__main__":
