@@ -66,5 +66,6 @@ jobs:
             PY
 
             systemctl restart uptime-monitor.service
-            systemctl is-active uptime-monitor.service
+            systemctl show uptime-monitor.service -p Result -p ExecMainStatus -p ActiveState -p SubState
+            systemctl show uptime-monitor.service --value -p Result | grep -Fx 'success'
             echo "Monitoring deployed at $(date)"
