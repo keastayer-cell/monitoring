@@ -49,14 +49,13 @@ jobs:
 
             python3 -m py_compile monitor_health.py
 
-            if ! command -v logrotate >/dev/null 2>&1; then
-              apt-get update
-              DEBIAN_FRONTEND=noninteractive apt-get install -y logrotate
-            fi
-
             install -m 0644 /opt/uptime-monitor/deploy/tg-poll-bot.logrotate /etc/logrotate.d/tg-poll-bot
-            logrotate -d /etc/logrotate.d/tg-poll-bot >/tmp/tg-poll-bot-logrotate-check.txt
             find /opt/bot_tg -maxdepth 1 -type f \( -name 'bot.log' -o -name 'bot.error.log' \) -size +50M -exec truncate -s 0 {} \;
+            if command -v logrotate >/dev/null 2>&1; then
+              logrotate -d /etc/logrotate.d/tg-poll-bot >/tmp/tg-poll-bot-logrotate-check.txt
+            else
+              echo "logrotate is not installed; config installed for future use"
+            fi
 
             python3 - <<'PY'
             import json
