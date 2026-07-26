@@ -29,6 +29,23 @@ python3 monitor_health.py
 - `systemd` - Проверка статуса systemd сервиса
 - `telegram_getme` - Проверка доступности Telegram Bot API
 
+## Telegram retry
+
+Проверка `telegram_getme` делает несколько попыток, чтобы одиночный сетевой таймаут Telegram не давал ложный DOWN.
+
+Настройки в `.env.monitor`:
+
+```bash
+TELEGRAM_CHECK_ATTEMPTS=3
+TELEGRAM_CHECK_RETRY_DELAY=2
+```
+
+## Логи TG Poll Bot
+
+Deploy ставит `/etc/logrotate.d/tg-poll-bot` из `deploy/tg-poll-bot.logrotate`.
+Ротация ограничивает `/opt/bot_tg/bot.log` и `/opt/bot_tg/bot.error.log`: 5 МБ на файл и 3 архивные копии.
+Во время deploy старые legacy-логи больше 50 МБ обнуляются, чтобы быстро освободить место.
+
 ## Необязательные цели
 
 Если цель должна оставаться в мониторинге и алертах, но не должна валить `uptime-monitor.service`,

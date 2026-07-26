@@ -1,0 +1,8 @@
+/opt/bot_tg/bot.log /opt/bot_tg/bot.error.log {
+    size 5M
+    rotate 3
+    compress
+    missingok
+    notifempty
+    copytruncate
+}

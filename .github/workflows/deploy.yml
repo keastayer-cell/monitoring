@@ -8,6 +8,7 @@ on:
       - "monitor_health.py"
       - "README.md"
       - "monitor_targets.example.json"
+      - "deploy/tg-poll-bot.logrotate"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
@@ -33,7 +34,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
-          source: "monitor_health.py,README.md,monitor_targets.example.json"
+          source: "monitor_health.py,README.md,monitor_targets.example.json,deploy/tg-poll-bot.logrotate"
           target: /opt/uptime-monitor
 
       - name: Restart monitor on VPS
@@ -47,6 +48,10 @@ jobs:
             cd /opt/uptime-monitor
 
             python3 -m py_compile monitor_health.py
+
+            install -m 0644 /opt/uptime-monitor/deploy/tg-poll-bot.logrotate /etc/logrotate.d/tg-poll-bot
+            logrotate -d /etc/logrotate.d/tg-poll-bot >/tmp/tg-poll-bot-logrotate-check.txt
+            find /opt/bot_tg -maxdepth 1 -type f \( -name 'bot.log' -o -name 'bot.error.log' \) -size +50M -exec truncate -s 0 {} \;
 
             python3 - <<'PY'
             import json

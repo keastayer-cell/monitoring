@@ -104,15 +104,26 @@ def check_telegram_bot(token: str, timeout: int = 10) -> tuple[bool, str]:
     if not token:
         return False, "missing token"
     url = f"https://api.telegram.org/bot{token}/getMe"
-    try:
-        with request.urlopen(url, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-            data = json.loads(body)
-            if data.get("ok"):
-                return True, "getMe ok"
-            return False, f"telegram not ok: {data}"
-    except Exception as exc:
-        return False, f"error: {exc}"
+    attempts = max(1, int(_env("TELEGRAM_CHECK_ATTEMPTS", "3")))
+    retry_delay = max(0, int(_env("TELEGRAM_CHECK_RETRY_DELAY", "2")))
+    last_error = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            req = request.Request(url, headers={"User-Agent": "uptime-monitor/1.0"})
+            with request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+                data = json.loads(body)
+                if data.get("ok"):
+                    suffix = "" if attempt == 1 else f" after {attempt} attempts"
+                    return True, f"getMe ok{suffix}"
+                return False, f"telegram not ok: {data}"
+        except Exception as exc:
+            last_error = f"error: {exc}"
+            if attempt < attempts:
+                time.sleep(retry_delay)
+    if attempts > 1 and last_error:
+        return False, f"{last_error} after {attempts} attempts"
+    return False, last_error or "error: unknown"
 
 
 def load_targets(bot_env_file: Path) -> list[dict]:
