@@ -46,6 +46,10 @@ Deploy ставит `/etc/logrotate.d/tg-poll-bot` из `deploy/tg-poll-bot.logr
 Ротация ограничивает `/opt/bot_tg/bot.log` и `/opt/bot_tg/bot.error.log`: 5 МБ на файл и 3 архивные копии.
 Во время deploy старые legacy-логи больше 50 МБ обнуляются, чтобы быстро освободить место.
 
+Deploy также ставит systemd drop-in `/etc/systemd/system/tg-poll-bot.service.d/logging.conf`
+из `deploy/tg-poll-bot-logging.conf`, чтобы stdout/stderr сервиса шли в journal,
+а не бесконтрольно росли в `bot.log` и `bot.error.log`.
+
 ## Необязательные цели
 
 Если цель должна оставаться в мониторинге и алертах, но не должна валить `uptime-monitor.service`,
