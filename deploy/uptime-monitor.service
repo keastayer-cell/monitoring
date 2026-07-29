@@ -1,0 +1,15 @@
+[Unit]
+Description=Uptime Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/uptime-monitor
+Environment=MONITOR_ENV_FILE=.env.monitor
+ExecStart=/opt/uptime-monitor/venv/bin/python /opt/uptime-monitor/monitor_health.py
+StateDirectory=uptime-monitor
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+

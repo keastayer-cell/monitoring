@@ -8,8 +8,8 @@ on:
       - "monitor_health.py"
       - "README.md"
       - "monitor_targets.example.json"
-      - "deploy/tg-poll-bot-logging.conf"
-      - "deploy/tg-poll-bot.logrotate"
+      - "deploy/uptime-monitor.service"
+      - "deploy/uptime-monitor.timer"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
@@ -35,7 +35,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
-          source: "monitor_health.py,README.md,monitor_targets.example.json,deploy/tg-poll-bot-logging.conf,deploy/tg-poll-bot.logrotate"
+          source: "monitor_health.py,README.md,monitor_targets.example.json,deploy/uptime-monitor.service,deploy/uptime-monitor.timer"
           target: /opt/uptime-monitor
 
       - name: Restart monitor on VPS
@@ -49,18 +49,9 @@ jobs:
             cd /opt/uptime-monitor
 
             python3 -m py_compile monitor_health.py
-
-            install -m 0644 /opt/uptime-monitor/deploy/tg-poll-bot.logrotate /etc/logrotate.d/tg-poll-bot
-            install -d -m 0755 /etc/systemd/system/tg-poll-bot.service.d
-            install -m 0644 /opt/uptime-monitor/deploy/tg-poll-bot-logging.conf /etc/systemd/system/tg-poll-bot.service.d/logging.conf
+            install -m 0644 deploy/uptime-monitor.service /etc/systemd/system/uptime-monitor.service
+            install -m 0644 deploy/uptime-monitor.timer /etc/systemd/system/uptime-monitor.timer
             systemctl daemon-reload
-            systemctl restart tg-poll-bot.service
-            find /opt/bot_tg -maxdepth 1 -type f \( -name 'bot.log' -o -name 'bot.error.log' \) -size +50M -exec truncate -s 0 {} \;
-            if command -v logrotate >/dev/null 2>&1; then
-              logrotate -d /etc/logrotate.d/tg-poll-bot >/tmp/tg-poll-bot-logrotate-check.txt
-            else
-              echo "logrotate is not installed; config installed for future use"
-            fi
 
             python3 - <<'PY'
             import json
@@ -79,7 +70,13 @@ jobs:
                     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
             PY
 
-            systemctl restart uptime-monitor.service
-            systemctl show uptime-monitor.service -p Result -p ExecMainStatus -p ActiveState -p SubState
-            systemctl show uptime-monitor.service --value -p Result | grep -Fx 'success'
-            echo "Monitoring deployed at $(date)"
+            if [[ '${{ vars.MONITORING_ENABLED }}' == 'true' ]]; then
+              systemctl restart uptime-monitor.service
+              systemctl show uptime-monitor.service -p Result -p ExecMainStatus -p ActiveState -p SubState
+              systemctl show uptime-monitor.service --value -p Result | grep -Fx 'success'
+              echo "Monitoring deployed and checked at $(date)"
+            else
+              systemctl stop uptime-monitor.timer uptime-monitor.service
+              systemctl disable uptime-monitor.timer >/dev/null 2>&1 || true
+              echo "Monitoring deployed but left disabled at $(date)"
+            fi
