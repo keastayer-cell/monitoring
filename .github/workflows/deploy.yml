@@ -48,6 +48,9 @@ jobs:
             set -euo pipefail
             cd /opt/uptime-monitor
 
+            chown root:root monitor_health.py README.md monitor_targets.example.json
+            chown -R root:root deploy
+            chmod 0644 monitor_health.py README.md monitor_targets.example.json deploy/*.service deploy/*.timer
             python3 -m py_compile monitor_health.py
             install -m 0644 deploy/uptime-monitor.service /etc/systemd/system/uptime-monitor.service
             install -m 0644 deploy/uptime-monitor.timer /etc/systemd/system/uptime-monitor.timer
