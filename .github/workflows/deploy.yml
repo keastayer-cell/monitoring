@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Syntax check
         run: python3 -m py_compile monitor_health.py && echo "Syntax OK"
