@@ -73,13 +73,19 @@ jobs:
                     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
             PY
 
-            if [[ '${{ vars.MONITORING_ENABLED }}' == 'true' ]]; then
-              systemctl restart uptime-monitor.service
-              systemctl show uptime-monitor.service -p Result -p ExecMainStatus -p ActiveState -p SubState
-              systemctl show uptime-monitor.service --value -p Result | grep -Fx 'success'
-              echo "Monitoring deployed and checked at $(date)"
-            else
-              systemctl stop uptime-monitor.timer uptime-monitor.service
-              systemctl disable uptime-monitor.timer >/dev/null 2>&1 || true
-              echo "Monitoring deployed but left disabled at $(date)"
+            test -x /opt/uptime-monitor/venv/bin/python
+            test -f /opt/uptime-monitor/.env.monitor
+            test -f /opt/uptime-monitor/monitor_targets.json
+
+            systemctl enable --now uptime-monitor.timer
+            if ! systemctl restart uptime-monitor.service; then
+              journalctl -u uptime-monitor.service -n 100 --no-pager
+              exit 1
             fi
+
+            systemctl show uptime-monitor.service -p Result -p ExecMainStatus -p ActiveState -p SubState
+            systemctl show uptime-monitor.service --value -p Result | grep -Fx 'success'
+            systemctl is-enabled --quiet uptime-monitor.timer
+            systemctl is-active --quiet uptime-monitor.timer
+            systemctl list-timers uptime-monitor.timer --no-pager
+            echo "Monitoring enabled and checked at $(date)"

@@ -20,8 +20,20 @@ python3 monitor_health.py
 ## На сервере
 
 - Расположение: `/opt/uptime-monitor/`
-- Управление: `systemctl status uptime-monitor.service`
-- Расписание: `systemctl status uptime-monitor.timer` (каждый час)
+- Расписание: `uptime-monitor.timer` запускает проверку каждый час
+- Ручной запуск: `systemctl start uptime-monitor.service`
+- Последние результаты: `journalctl -u uptime-monitor.service -n 100 --no-pager`
+
+Deploy в `main` устанавливает service и timer, включает расписание на сервере и сразу
+выполняет одну проверку. Deploy завершается ошибкой и выводит журнал сервиса, если
+серверная конфигурация отсутствует или критичная цель недоступна.
+
+Проверить расписание на сервере:
+
+```bash
+systemctl status uptime-monitor.timer
+systemctl list-timers uptime-monitor.timer --no-pager
+```
 
 ## Поддерживаемые типы проверок
 
@@ -39,16 +51,6 @@ python3 monitor_health.py
 TELEGRAM_CHECK_ATTEMPTS=3
 TELEGRAM_CHECK_RETRY_DELAY=2
 ```
-
-## Логи TG Poll Bot
-
-Deploy ставит `/etc/logrotate.d/tg-poll-bot` из `deploy/tg-poll-bot.logrotate`.
-Ротация ограничивает `/opt/bot_tg/bot.log` и `/opt/bot_tg/bot.error.log`: 5 МБ на файл и 3 архивные копии.
-Во время deploy старые legacy-логи больше 50 МБ обнуляются, чтобы быстро освободить место.
-
-Deploy также ставит systemd drop-in `/etc/systemd/system/tg-poll-bot.service.d/logging.conf`
-из `deploy/tg-poll-bot-logging.conf`, чтобы stdout/stderr сервиса шли в journal,
-а не бесконтрольно росли в `bot.log` и `bot.error.log`.
 
 ## Необязательные цели
 
