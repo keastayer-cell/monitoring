@@ -1,15 +1,18 @@
+from __future__ import annotations
+
 import json
 import os
 import smtplib
 import ssl
 import subprocess
 import time
+from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from urllib import error, parse, request
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-
 
 BASE_DIR = Path(__file__).resolve().parent
 ENV_FILE = os.getenv("MONITOR_ENV_FILE", ".env.monitor")
@@ -118,7 +121,7 @@ def check_telegram_bot(token: str, timeout: int = 10) -> tuple[bool, str]:
                     return True, f"getMe ok{suffix}"
                 return False, f"telegram not ok: {data}"
         except Exception as exc:
-            last_error = f"error: {exc}"
+            last_error = f"error: {type(exc).__name__}"
             if attempt < attempts:
                 time.sleep(retry_delay)
     if attempts > 1 and last_error:
@@ -226,7 +229,10 @@ def load_state(path: Path) -> dict:
 
 def save_state(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.chmod(0o600)
+    temporary.replace(path)
 
 
 def send_email(subject: str, body: str) -> None:
@@ -273,17 +279,122 @@ def send_telegram(token: str, chat_id: str, text: str) -> bool:
             data = json.loads(body)
             return bool(data.get("ok"))
     except Exception as exc:
-        print(f"[monitor] Telegram send failed: {exc}")
+        print(f"[monitor] Telegram send failed: {type(exc).__name__}")
         return False
 
 
-def notify(subject: str, body: str, token: str, chat_id: str) -> None:
+def notify(subject: str, body: str, token: str, chat_id: str) -> bool:
     # Prefer Telegram for simpler setup; email is optional fallback/additional channel.
     text = f"{subject}\n\n{body}"
     sent_telegram = send_telegram(token, chat_id, text)
-    send_email(subject, body)
+    try:
+        send_email(subject, body)
+    except Exception as exc:
+        print(f"[monitor] Email send failed: {type(exc).__name__}")
     if not sent_telegram:
         print("[monitor] Telegram notification was not sent")
+    return sent_telegram
+
+
+def update_incidents(previous: dict, checks: dict, observed_at: str) -> dict:
+    current = {}
+    for target_id, (ok, details) in checks.items():
+        old = previous.get(target_id, {})
+        # Keep undelivered reports even if another outage starts before delivery.
+        incidents = [dict(incident) for incident in old.get("incidents", [])]
+        if not incidents and old and not old.get("ok", False):
+            # Old versions did not record delivery or the start time: never invent them.
+            incidents.append(
+                {
+                    "started_at": None,
+                    "down_attempted": True,
+                    "down_delivered": False,
+                    "delivery_unknown": True,
+                }
+            )
+        active = next((item for item in reversed(incidents) if not item.get("recovered_at")), None)
+        if not ok and active is None:
+            active = {"started_at": observed_at, "down_delivered": False}
+            incidents.append(active)
+        if ok and active is not None:
+            active["recovered_at"] = observed_at
+        current[target_id] = {"ok": ok, "details": details, "incidents": incidents}
+    return current
+
+
+def incident_time(value: str | None) -> str:
+    if not value:
+        return "неизвестно (сбой начался до обновления мониторинга)"
+    return (
+        datetime.fromisoformat(value)
+        .astimezone(ZoneInfo("Europe/Moscow"))
+        .strftime("%d.%m.%Y %H:%M:%S МСК")
+    )
+
+
+def notify_incidents(current, targets_map, state_file, hostname, observed_at, token, chat_id):
+    down = {}
+    for target_id, info in current.items():
+        for incident in info["incidents"]:
+            if not incident.get("recovered_at") and not incident.get("down_attempted"):
+                incident["down_attempted"] = True
+                down[target_id] = incident
+    # Save attempts before delivery; failed DOWN alerts become retrospective reports.
+    save_state(state_file, current)
+    if down:
+        lines = [f"[{observed_at}] {hostname}: detected DOWN targets"]
+        for target_id, incident in down.items():
+            lines.append(format_target_line(targets_map[target_id], current[target_id]["details"]))
+            lines.append(f"Сбой обнаружен: {incident_time(incident['started_at'])}")
+        if notify(
+            build_subject("ALERT DOWN", list(down), targets_map), "\n\n".join(lines), token, chat_id
+        ):
+            for incident in down.values():
+                incident["down_delivered"] = True
+        save_state(state_file, current)
+
+    for delivered in (True, False):
+        recovered = {
+            target_id: [
+                item
+                for item in info["incidents"]
+                if item.get("recovered_at") and item["down_delivered"] == delivered
+            ]
+            for target_id, info in current.items()
+            if info["ok"]
+        }
+        recovered = {target_id: items for target_id, items in recovered.items() if items}
+        if not recovered:
+            continue
+        explanation = (
+            "✅ Связь восстановлена. Ранее предупреждение о сбое было отправлено."
+            if delivered
+            else "⚠️ Сбой уже завершился. Предупреждение в Telegram сразу доставить не удалось."
+        )
+        if any(item.get("delivery_unknown") for items in recovered.values() for item in items):
+            explanation = (
+                "⚠️ Сбой завершился. Для событий до обновления мониторинга "
+                "сведения о доставке предупреждения не сохранены."
+            )
+        lines = [f"[{observed_at}] {hostname}", explanation]
+        for target_id, incidents in recovered.items():
+            lines.append(format_target_line(targets_map[target_id], current[target_id]["details"]))
+            for incident in incidents:
+                lines.append(
+                    f"Сбой обнаружен: {incident_time(incident['started_at'])}\n"
+                    f"Восстановление обнаружено: {incident_time(incident['recovered_at'])}"
+                )
+        lines.append("Это время проверок; точные начало и конец сбоя между ними неизвестны.")
+        prefix = "RECOVERY" if delivered else "MISSED ALERT"
+        if notify(
+            build_subject(prefix, list(recovered), targets_map), "\n\n".join(lines), token, chat_id
+        ):
+            for target_id, incidents in recovered.items():
+                current[target_id]["incidents"] = [
+                    item for item in current[target_id]["incidents"] if item not in incidents
+                ]
+        # Retry an undelivered final report on the next scheduled run, not as a new outage.
+        save_state(state_file, current)
 
 
 def format_target_line(target: dict, details: str) -> str:
@@ -334,43 +445,25 @@ def main() -> int:
 
     state_file = Path(_env("MONITOR_STATE_FILE", "/var/lib/uptime-monitor/state.json"))
     prev = load_state(state_file)
-    current = {name: {"ok": ok, "details": details} for name, (ok, details) in checks.items()}
-
-    failed_now = [name for name, (ok, _) in checks.items() if not ok]
+    observed_at = datetime.now(timezone.utc).isoformat()
+    current = update_incidents(prev, checks, observed_at)
     blocking_failed_now = [
         target_id
         for target_id, (ok, _) in checks.items()
         if not ok and _bool(targets_map.get(target_id, {}).get("affects_exit_code"), True)
     ]
-    failed_prev = [name for name, info in prev.items() if not info.get("ok", False)]
-
-    became_down = sorted(set(failed_now) - set(failed_prev))
-    became_up = sorted(set(failed_prev) - set(failed_now))
-
     hostname = _env("MONITOR_NAME") or os.uname().nodename
-    ts = time.strftime("%Y-%m-%d %H:%M:%S %Z")
-
-    if became_down:
-        lines = [f"[{ts}] {hostname}: detected DOWN targets"]
-        for target_id in became_down:
-            target = targets_map.get(target_id, {"id": target_id, "name": target_id, "repo": "-", "type": "-"})
-            lines.append(format_target_line(target, str(current[target_id]["details"])))
-        notify(build_subject("ALERT DOWN", became_down, targets_map), "\n\n".join(lines), alert_token, alert_chat_id)
-
-    if became_up:
-        lines = [f"[{ts}] {hostname}: recovered targets"]
-        for target_id in became_up:
-            target = targets_map.get(target_id, {"id": target_id, "name": target_id, "repo": "-", "type": "-"})
-            details = current.get(target_id, {}).get("details") or prev.get(target_id, {}).get("details") or "ok"
-            lines.append(format_target_line(target, str(details)))
-        notify(build_subject("RECOVERY", became_up, targets_map), "\n\n".join(lines), alert_token, alert_chat_id)
-
-    save_state(state_file, current)
+    notify_incidents(
+        current, targets_map, state_file, hostname, observed_at, alert_token, alert_chat_id
+    )
 
     for target_id, (ok, details) in checks.items():
         status = "OK" if ok else "FAIL"
         target = targets_map.get(target_id, {"name": target_id, "repo": "-", "type": "-"})
-        print(f"{status} {target.get('name')} | repo={target.get('repo')} | type={target.get('type')} | {details}")
+        print(
+            f"{status} {target.get('name')} | repo={target.get('repo')} | "
+            f"type={target.get('type')} | {details}"
+        )
 
     return 0 if not blocking_failed_now else 1
 

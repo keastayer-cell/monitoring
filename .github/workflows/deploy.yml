@@ -7,6 +7,8 @@ on:
     paths:
       - "monitor_health.py"
       - "README.md"
+      - "tests/**"
+      - "requirements-dev.txt"
       - "monitor_targets.example.json"
       - "deploy/uptime-monitor.service"
       - "deploy/uptime-monitor.timer"
@@ -26,8 +28,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Syntax check
-        run: python3 -m py_compile monitor_health.py && echo "Syntax OK"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Test monitoring notifications
+        run: |
+          python3 -m pip install -r requirements-dev.txt
+          python3 -m py_compile monitor_health.py
+          python3 -m pytest -q
+
+      - name: Back up current monitor
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: |
+            set -eu
+            backup_dir="/opt/uptime-monitor/backups/${{ github.sha }}"
+            install -d -m 0700 "$backup_dir"
+            cp -p /opt/uptime-monitor/monitor_health.py "$backup_dir/monitor_health.py"
+            if test -f /var/lib/uptime-monitor/state.json; then
+              cp -p /var/lib/uptime-monitor/state.json "$backup_dir/state.json"
+              chmod 0600 "$backup_dir/state.json"
+            fi
 
       - name: Upload monitoring files to VPS
         uses: appleboy/scp-action@v0.1.7
