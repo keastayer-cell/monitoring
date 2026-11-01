@@ -56,16 +56,29 @@ jobs:
                 else:
                     poll = data.get('polls', {}).get(data.get('current_poll_id'), {})
                     summary = {'active_poll': bool(poll), 'poll_date': poll.get('poll_date'),
-                               'yes_count': poll.get('yes_count'), 'no_count': poll.get('no_count')}
+                               'yes_count': poll.get('yes_count'), 'no_count': poll.get('no_count'),
+                               'manual_guest_count': len(poll.get('manual_yes_voters', {})),
+                               'slava_guest_count': sum(1 for guest in poll.get('manual_yes_voters', {}).values()
+                                   if guest.get('label', '').strip().casefold() == 'слава')}
                 print(filename, json.dumps(summary), flush=True)
             result = subprocess.run(['journalctl', '-u', 'tg-poll-bot', '--since',
-                '2026-11-01 00:00:00 UTC', '--no-pager', '-o', 'short-iso'],
+                '24 hours ago', '--no-pager', '-o', 'short-iso'],
                 capture_output=True, text=True, timeout=15)
             lines = [line for line in result.stdout.splitlines() if any(word in line for word in
                 ('WARNING', 'ERROR', 'Опрос создан', 'Бот запущен', 'Планировщик запущен'))]
             print('Recent event/error lines:', flush=True)
             for line in lines[-40:]:
+                if ' - ERROR - ' in line:
+                    line = line.split('update=')[0] + 'update=[omitted]'
                 print(clean(line), flush=True)
+            rows = result.stdout.splitlines()
+            errors = [index for index, line in enumerate(rows) if ' - ERROR - ' in line]
+            if errors:
+                print('Last error traceback:', flush=True)
+                for line in rows[errors[-1] + 1:errors[-1] + 90]:
+                    if any(level in line for level in (' - INFO - ', ' - WARNING - ', ' - ERROR - ')):
+                        break
+                    print(clean(line), flush=True)
             for method in ('getMe', 'getWebhookInfo'):
                 try:
                     with request.urlopen('https://api.telegram.org/bot' + settings.bot_token
