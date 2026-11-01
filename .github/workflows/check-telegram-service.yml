@@ -1,0 +1,82 @@
+name: Check Telegram Service
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Read server and Telegram bot status
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          timeout: 60s
+          command_timeout: 120s
+          script: |
+            set -eu
+            /opt/bot_tg/venv/bin/python - <<'PY'
+            import json, re, subprocess, sys
+            from datetime import datetime, timezone
+            from pathlib import Path
+            from urllib import request
+            sys.path.insert(0, '/opt/bot_tg')
+            from config import load_settings
+
+            print('UTC:', datetime.now(timezone.utc).isoformat(), flush=True)
+            settings = load_settings('/opt/bot_tg')
+
+            def clean(text):
+                text = text.replace(settings.bot_token, '[REDACTED]')
+                return re.sub(r'\b[0-9]{8,12}:[A-Za-z0-9_-]{25,}\b', '[REDACTED]', text)
+
+            commands = [
+                ['uptime'], ['free', '-m'], ['df', '-h', '/'],
+                ['systemctl', 'show', 'tg-poll-bot', '-p', 'ActiveState', '-p', 'SubState',
+                 '-p', 'MainPID', '-p', 'Result', '-p', 'NRestarts', '-p', 'ActiveEnterTimestamp'],
+            ]
+            for command in commands:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+                print(clean(result.stdout), flush=True)
+            for filename in ('health.json', 'state.json'):
+                path = settings.data_dir / filename
+                if not path.exists():
+                    print(filename, 'MISSING', flush=True)
+                    continue
+                data = json.loads(path.read_text())
+                if filename == 'health.json':
+                    summary = {key: data.get(key) for key in ('status', 'checked_at',
+                        'last_success_at', 'error_type', 'consecutive_failures', 'scheduler_running')}
+                else:
+                    poll = data.get('polls', {}).get(data.get('current_poll_id'), {})
+                    summary = {'active_poll': bool(poll), 'poll_date': poll.get('poll_date'),
+                               'yes_count': poll.get('yes_count'), 'no_count': poll.get('no_count')}
+                print(filename, json.dumps(summary), flush=True)
+            result = subprocess.run(['journalctl', '-u', 'tg-poll-bot', '--since',
+                '2026-11-01 00:00:00 UTC', '--no-pager', '-o', 'short-iso'],
+                capture_output=True, text=True, timeout=15)
+            lines = [line for line in result.stdout.splitlines() if any(word in line for word in
+                ('WARNING', 'ERROR', 'Опрос создан', 'Бот запущен', 'Планировщик запущен'))]
+            print('Recent event/error lines:', flush=True)
+            for line in lines[-40:]:
+                print(clean(line), flush=True)
+            for method in ('getMe', 'getWebhookInfo'):
+                try:
+                    with request.urlopen('https://api.telegram.org/bot' + settings.bot_token
+                                         + '/' + method, timeout=10) as response:
+                        data = json.load(response)
+                    print(method, 'ok=', data.get('ok'), flush=True)
+                    if method == 'getWebhookInfo':
+                        info = data.get('result', {})
+                        print('webhook_configured=', bool(info.get('url')),
+                              'pending_updates=', info.get('pending_update_count'), flush=True)
+                except Exception as error:
+                    reason = getattr(error, 'reason', error)
+                    print(method, type(error).__name__, type(reason).__name__, flush=True)
+            PY
